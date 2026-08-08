@@ -1,2 +1,2 @@
-# SchedX
-A distributed job scheduling framework that coordinates clients and worker nodes using TCP sockets, multithreading, and configurable scheduling algorithms for efficient task execution.
+#NovaShell
+A lightweight Unix-like shell built in C++ using Linux system calls for process management, command execution, I/O redirection, and inter-process communication.
