@@ -25,6 +25,10 @@ int main() {
         while (ss >> token) {
             args.push_back(token);
         }
+        
+        if(args.empty()) {
+            continue; // No command entered, prompt again
+        }   
 
         //build in command for changing directory
         if(args[0]=="cd"){
@@ -43,6 +47,8 @@ int main() {
 
         string outputFile;
         bool redirectOutput = false;
+        string inputFile;
+        bool redirectInput = false;
 
         for (int i = 0; i < (int)args.size(); i++) {
 
@@ -65,47 +71,192 @@ int main() {
 
                 break;
             }
-        }   
+        }  
+        
+        for (int i = 0; i < (int)args.size(); i++) {
+
+            if (args[i] == "<") {
+
+                redirectInput = true;
+
+                if (i + 1 >= (int)args.size()) {
+                    cerr << "Syntax error: missing input file\n";
+                    redirectInput = false;
+                    break;
+                }
+
+                inputFile = args[i + 1];
+
+                // Remove "<" and filename
+                args.erase(args.begin() + i,
+                        args.begin() + i + 2);
+
+                break;
+            }
+        }
+
         if(args.empty()) {
             continue; // No command entered, prompt again
         }   
 
-        pid_t pid = fork();
-
-        //fork fail
-        if(pid < 0) {
-            std::cerr << "Fork failed." << std::endl;
-            return 1;
+        int pipeIndex = -1;
+        for (int i = 0; i < (int)args.size(); i++) {
+            if (args[i] == "|") {
+                pipeIndex = i;
+                break;
+            }
         }
+        if (pipeIndex != -1) {
+            vector<string> leftArgs;
+            vector<string> rightArgs;
+            for (int i = 0; i < pipeIndex; i++) {
+                leftArgs.push_back(args[i]);
+            }
+            for (int i = pipeIndex + 1; i < (int)args.size(); i++) {
+                rightArgs.push_back(args[i]);
+            }
+            if (leftArgs.empty() || rightArgs.empty()) {
+                cerr << "Syntax error near pipe\n";
+                continue;
+            }
+            int pipefd[2];
+            if (pipe(pipefd) == -1) {
+                perror("pipe");
+                continue;
+            }
+            // First child
+            pid_t pid1 = fork();
+
+            if (pid1 < 0) {
+                perror("fork");
+                close(pipefd[0]);
+                close(pipefd[1]);
+                continue;
+            }
+
+            if (pid1 == 0) {
+
+                // stdout → pipe
+                dup2(pipefd[1], STDOUT_FILENO);
+
+                close(pipefd[0]);
+                close(pipefd[1]);
+
+                vector<char*> argv1;
+
+                for (auto& arg : leftArgs) {
+                    argv1.push_back(const_cast<char*>(arg.c_str()));
+                }
+
+                argv1.push_back(nullptr);
+
+                execvp(argv1[0], argv1.data());
+
+                perror("execvp left");
+                exit(1);
+            }
+            // Second child
+            pid_t pid2 = fork();
+            if (pid2 < 0) {
+                    perror("fork");
+                    close(pipefd[0]);
+                    close(pipefd[1]);
+                    waitpid(pid1, nullptr, 0);
+                    continue;
+            }
+
+            if (pid2 == 0) {
+
+                    // pipe → stdin
+                    dup2(pipefd[0], STDIN_FILENO);
+
+                    close(pipefd[0]);
+                    close(pipefd[1]);
+
+                    vector<char*> argv2;
+
+                    for (auto& arg : rightArgs) {
+                        argv2.push_back(const_cast<char*>(arg.c_str()));
+                    }
+
+                    argv2.push_back(nullptr);
+
+                    execvp(argv2[0], argv2.data());
+
+                    perror("execvp right");
+                    exit(1);
+            }
+
+            // Parent
+            close(pipefd[0]);
+            close(pipefd[1]);
+
+            waitpid(pid1, nullptr, 0);
+            waitpid(pid2, nullptr, 0);
+
+            continue;
+        }
+            pid_t pid = fork();
+
+            //fork fail
+            if(pid < 0) {
+                std::cerr << "Fork failed." << std::endl;
+                return 1;
+            }
 
         //child process
         else if (pid == 0) {
-            // Handle >
+
+            // Input redirection <
+            if (redirectInput) {
+
+                int fd = open(inputFile.c_str(), O_RDONLY);
+
+                if (fd < 0) {
+                    perror("open");
+                    exit(1);
+                }
+
+                if (dup2(fd, STDIN_FILENO) < 0) {
+                    perror("dup2");
+                    close(fd);
+                    exit(1);
+                }
+
+                close(fd);
+            }
+
+            // Output redirection >
             if (redirectOutput) {
+
                 int fd = open(
                     outputFile.c_str(),
                     O_WRONLY | O_CREAT | O_TRUNC,
                     0644
                 );
+
                 if (fd < 0) {
                     perror("open");
                     exit(1);
                 }
-                // stdout → file
+
                 if (dup2(fd, STDOUT_FILENO) < 0) {
                     perror("dup2");
                     close(fd);
                     exit(1);
                 }
+
                 close(fd);
             }
-                        vector<char*> argv;
+
+            vector<char*> argv;
 
             for (auto& arg : args) {
                 argv.push_back(arg.data());
             }
 
             argv.push_back(nullptr);
+
 
             // Execute command
             execvp(argv[0], argv.data());
